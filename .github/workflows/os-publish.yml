@@ -10,50 +10,55 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.x'
+      # 1 – Set up Python
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
 
-    - name: Download latest-version.json from Artifactory
-      env:
-        ART_USER: ${{ secrets.ART_USER }}
-        ART_TOKEN: ${{ secrets.ART_TOKEN }}
-      run: |
-        curl -f -u "$ART_USER:$ART_TOKEN" \
-          -o latest-version.json \
-          "https://artifactory.switchless.net/artifactory/core-os/latest-version.json" || echo "{}" > latest-version.json
+      # 2 – Download the current latest-version.json (start with {} if it doesn’t exist)
+      - name: Download latest-version.json from Artifactory
+        env:
+          ART_USER: ${{ secrets.ART_USER }}
+          ART_TOKEN: ${{ secrets.ART_TOKEN }}
+        run: |
+          curl -f -u "$ART_USER:$ART_TOKEN" \
+            -o latest-version.json \
+            "https://artifactory.switchless.net/artifactory/core-os/latest-version.json" \
+            || echo "{}" > latest-version.json
 
-    - name: Insert new version into latest-version.json
-      run: |
-        pip install packaging
+      # 3 – Insert this release into the JSON (keeps versions sorted newest → oldest)
+      - name: Insert new version into latest-version.json
+        env:
+          NEW_VERSION: ${{ github.ref_name }}
+        run: |
+          pip install --quiet packaging
+          python3 - <<'PY'
+          import json, os
+          from packaging.version import parse as V
 
-        python3 -c "
-import json
-from packaging.version import parse as V
+          new_version = os.environ["NEW_VERSION"]
+          url = f"https://artifactory.switchless.net/artifactory/core-os/{new_version}/"
 
-new_version = '${{ github.ref_name }}'
-url = f'https://artifactory.switchless.net/artifactory/core-os/{new_version}/'
+          try:
+              with open("latest-version.json") as f:
+                  data = json.load(f)
+          except FileNotFoundError:
+              data = {}
 
-try:
-    with open('latest-version.json') as f:
-        data = json.load(f)
-except:
-    data = {}
+          data[new_version] = url
+          sorted_data = dict(sorted(data.items(), key=lambda x: V(x[0]), reverse=True))
 
-data[new_version] = url
-# Sort descending by semver
-sorted_data = dict(sorted(data.items(), key=lambda x: V(x[0]), reverse=True))
+          with open("latest-version.json", "w") as f:
+              json.dump(sorted_data, f, indent=2)
+          PY
 
-with open('latest-version.json', 'w') as f:
-    json.dump(sorted_data, f, indent=2)
-"
-
-    - name: Upload updated latest-version.json to Artifactory
-      env:
-        ART_USER: ${{ secrets.ART_USER }}
-        ART_TOKEN: ${{ secrets.ART_TOKEN }}
-      run: |
-        curl -u "$ART_USER:$ART_TOKEN" \
-          -T latest-version.json \
-          "https://artifactory.switchless.net/artifactory/core-os/latest-version.json"
+      # 4 – Upload the updated file back to Artifactory
+      - name: Upload updated latest-version.json to Artifactory
+        env:
+          ART_USER: ${{ secrets.ART_USER }}
+          ART_TOKEN: ${{ secrets.ART_TOKEN }}
+        run: |
+          curl -u "$ART_USER:$ART_TOKEN" \
+            -T latest-version.json \
+            "https://artifactory.switchless.net/artifactory/core-os/latest-version.json"
